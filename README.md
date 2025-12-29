@@ -181,6 +181,18 @@ To make this project production-ready, consider the following:
 3.  **Sliding Window:** A sliding window is used to scan the image for faces.
 4.  **Co-simulation:** The Verilog simulation communicates with the Python-based emotion classifier over a socket connection.
 5.  **Vivado Synthesis:** The Verilog code is synthesized for a Xilinx FPGA using Vivado.
+--
+## Results
+<img width="1117" height="561" alt="image" src="https://github.com/user-attachments/assets/479f6c46-b406-4252-b28c-3ddaf1bf477d" />
+
+--
+<img width="1600" height="900" alt="image" src="https://github.com/user-attachments/assets/ce4ae7f5-dbbe-4a82-8831-775fcac689b0" />
+<img width="1600" height="900" alt="image" src="https://github.com/user-attachments/assets/fe0c1182-35c5-4d2f-8269-e6324c96098d" />
+
+
+### Contributors
+I would like to sincerely thank *Pratyush Kumar* for his valuable collaboration and consistent support throughout this project.The discussions, idea exchanges, and teamwork made this project both productive and enriching.
+
 
 ## References
 
