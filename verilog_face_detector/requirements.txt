@@ -1,0 +1,25 @@
+# Python Requirements for Emotion Classification Co-Simulation
+
+# Core dependencies
+flask>=2.0.0
+numpy>=1.21.0
+Pillow>=9.0.0
+
+# For XML parsing (Haar cascade)
+lxml>=4.6.0
+
+# TensorFlow/Keras for emotion classification with Mini-Xception model
+# Use CPU-only version for most systems (smaller, faster to install)
+tensorflow-cpu>=2.10.0
+
+# If you have GPU support, use this instead:
+# tensorflow>=2.10.0
+
+# Optional: For training your own emotion model
+# opencv-python>=4.5.0
+# matplotlib>=3.5.0
+# scikit-learn>=1.0.0
+
+# For better visualization
+# pandas>=1.3.0
+# seaborn>=0.11.0

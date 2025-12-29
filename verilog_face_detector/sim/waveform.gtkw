@@ -1,0 +1,57 @@
+[*]
+[*] GTKWave Analyzer v3.3.100 (w)1999-2019 BSI
+[*] Tue Oct 15 00:00:00 2025
+[*]
+[dumpfile] "/home/pratyush/repos/Emotion-Classifier-Using-Verilog/verilog_face_detector/sim/waveform.vcd"
+[savefile] "/home/pratyush/repos/Emotion-Classifier-Using-Verilog/verilog_face_detector/sim/waveform.gtkw"
+[timestart] 0
+[size] 1920 1080
+[pos] -1 -1
+*-18.000000 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+[treeopen] tb_face_detector.
+[treeopen] tb_face_detector.dut.
+[treeopen] tb_face_detector.dut.control.
+[sst_width] 250
+[signals_width] 250
+[sst_expanded] 1
+[sst_vpaned_height] 500
+@28
+tb_face_detector.clk
+tb_face_detector.rst
+tb_face_detector.start
+@200
+-
+@28
+tb_face_detector.dut.done
+tb_face_detector.dut.face_detected
+@22
+tb_face_detector.dut.face_x[7:0]
+tb_face_detector.dut.face_y[7:0]
+tb_face_detector.dut.face_scale[7:0]
+@200
+-
+-FSM State
+@22
+tb_face_detector.dut.control.state[2:0]
+@28
+tb_face_detector.dut.control.ii_start
+tb_face_detector.dut.control.ii_done
+tb_face_detector.dut.control.stage_start
+tb_face_detector.dut.control.stage_done
+tb_face_detector.dut.control.stage_passed
+@22
+tb_face_detector.dut.control.current_stage[4:0]
+tb_face_detector.dut.control.stage_counter[4:0]
+tb_face_detector.dut.control.window_x[7:0]
+tb_face_detector.dut.control.window_y[7:0]
+tb_face_detector.dut.control.window_scale[7:0]
+@200
+-
+-Pixel Input
+@28
+tb_face_detector.pixel_valid
+@22
+tb_face_detector.pixel_in[7:0]
+tb_face_detector.pixel_count[31:0]
+[pattern_trace] 1
+[pattern_trace] 0

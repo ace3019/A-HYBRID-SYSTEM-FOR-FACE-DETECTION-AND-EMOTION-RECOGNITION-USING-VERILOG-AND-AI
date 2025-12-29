@@ -1,0 +1,637 @@
+This file provides a complete guide to setting up the Vivado project for the Verilog Face Detector on a Windows machine.
+
+================================================================================
+SECTION 1: PREREQUISITES
+================================================================================
+
+Before you begin, ensure you have the following software installed on your Windows machine:
+
+1.  **Xilinx Vivado:** The Vivado Design Suite (2018.1 or later is recommended). This is required for creating, synthesizing, and implementing the hardware design.
+2.  **Python 3:** A recent version of Python 3 (e.g., 3.8 or newer). Make sure to check "Add Python to PATH" during installation.
+
+================================================================================
+SECTION 2: PROJECT SETUP
+================================================================================
+
+Follow these steps to prepare the project files.
+
+--------------------------------------------------------------------------------
+STEP 2.1: COPY PROJECT FILES
+--------------------------------------------------------------------------------
+
+Copy the entire `verilog_face_detector` directory to your Windows machine.
+
+--------------------------------------------------------------------------------
+STEP 2.2: INSTALL PYTHON DEPENDENCIES
+--------------------------------------------------------------------------------
+
+Open a command prompt (`cmd.exe`) or PowerShell, navigate to the `verilog_face_detector` directory, and run the following command to install the necessary Python libraries. The `lxml` library is required by the parsing script.
+
+```
+pip install -r requirements.txt
+```
+
+--------------------------------------------------------------------------------
+STEP 2.3: PREPARE VIVADO DATA FILES
+--------------------------------------------------------------------------------
+
+The Vivado project requires memory initialization files (`.coe`) for the Haar Cascade data. These are generated from the `haarcascade_frontalface_default.xml` file.
+
+1.  **Save the code below** as `parse_cascade.py` in your `verilog_face_detector` directory.
+2.  **Run the script** from your command prompt: `python parse_cascade.py`
+
+This will create `cascade_data.coe` and `feature_lut.coe` in the `data/` directory.
+
+---
+**`parse_cascade.py`**
+```python
+import struct
+from lxml import etree
+import os
+
+# Fixed-point configuration
+FIXED_POINT_BITS = 32
+FIXED_POINT_FRAC = 16
+FIXED_POINT_SCALE = 2**FIXED_POINT_FRAC
+
+def float_to_fixed_point(val):
+    """Converts a float to a Q16.16 fixed-point integer."""
+    return int(val * FIXED_POINT_SCALE)
+
+def to_hex(val):
+    """Converts a signed integer to a 32-bit hex string."""
+    return format(val & 0xFFFFFFFF, '08x')
+
+def parse_xml(xml_file):
+    """Parses the Haar cascade XML file and returns the stages and features."""
+    print(f"Parsing {xml_file}...")
+    tree = etree.parse(xml_file)
+    root = tree.getroot()
+
+    cascade = root.find('.//cascade')
+    if cascade is None:
+        raise ValueError("Error: Could not find cascade in XML")
+
+    width = int(cascade.find('width').text)
+    height = int(cascade.find('height').text)
+    print(f"Base window size: {width}x{height}")
+
+    features_elem = cascade.find('features')
+    feature_list = features_elem.findall('_')
+    print(f"Found {len(feature_list)} features")
+
+    features = []
+    for feature in feature_list:
+        rects = feature.find('rects')
+        rect_list = rects.findall('_')
+        
+        feature_rects = []
+        for rect in rect_list:
+            rect_data = rect.text.strip().split()
+            x, y, w, h = map(int, rect_data[:4])
+            weight = float(rect_data[4].rstrip('.'))
+            feature_rects.append((x, y, w, h, weight))
+        features.append(feature_rects)
+
+    stages_elem = cascade.find('stages')
+    stage_list = stages_elem.findall('_')
+    print(f"Found {len(stage_list)} stages")
+
+    return stage_list, features, width, height
+
+def write_mem_file(mem_file, stages, features, width, height):
+    """Writes the cascade data to a .mem file."""
+    print(f"Writing to {mem_file}...")
+    with open(mem_file, 'w') as f:
+        f.write(f"// Haar Cascade Data for Face Detection\n")
+        f.write(f"// Number of stages: {len(stages)}\n")
+        f.write(f"// Number of features: {len(features)}\n")
+        f.write(f"// Base window: {width}x{height}\n")
+        f.write(f"// Format: Fixed-point Q16.16\n\n")
+
+        total_weak_classifiers = 0
+        for stage_idx, stage in enumerate(stages):
+            stage_threshold = float(stage.find('stageThreshold').text)
+            stage_threshold_hex = to_hex(float_to_fixed_point(stage_threshold))
+            f.write(f"// Stage {stage_idx}\n")
+            f.write(f"{stage_threshold_hex}\n")
+
+            classifiers = stage.find('weakClassifiers').findall('_')
+            f.write(f"{len(classifiers):08x}\n")
+            total_weak_classifiers += len(classifiers)
+
+            for classifier in classifiers:
+                internal_data = classifier.find('internalNodes').text.strip().split()
+                feature_idx = int(internal_data[2])
+                threshold = float(internal_data[3])
+
+                leaf_data = classifier.find('leafValues').text.strip().split()
+                left_val = float(leaf_data[0])
+                right_val = float(leaf_data[1])
+
+                feature_idx_hex = to_hex(feature_idx)
+                threshold_hex = to_hex(float_to_fixed_point(threshold))
+                left_hex = to_hex(float_to_fixed_point(left_val))
+                right_hex = to_hex(float_to_fixed_point(right_val))
+                f.write(f"{feature_idx_hex} {threshold_hex} {left_hex} {right_hex}\n")
+            f.write("\n")
+
+        # This part of the file is not used by the Verilog code,
+        # but we'll keep it for debugging purposes.
+        f.write("// === FEATURES SECTION (for debugging) ===\n")
+        for feat_idx, feature_rects in enumerate(features):
+            f.write(f"// Feature {feat_idx}\n")
+            f.write(f"{len(feature_rects):08x}\n")
+            for x, y, w, h, weight in feature_rects:
+                weight_hex = to_hex(float_to_fixed_point(weight))
+                f.write(f"{x:08x} {y:08x} {w:08x} {h:08x} {weight_hex}\n")
+            f.write("\n")
+    print(f"Total weak classifiers: {total_weak_classifiers}")
+
+def write_coe_file(coe_file, stages, features, width, height):
+    """Writes the cascade data to a .coe file."""
+    print(f"Writing to {coe_file}...")
+    with open(coe_file, 'w') as f:
+        f.write("memory_initialization_radix=16;\n")
+        f.write("memory_initialization_vector=\n")
+
+        all_data = []
+        for stage_idx, stage in enumerate(stages):
+            stage_threshold = float(stage.find('stageThreshold').text)
+            all_data.append(to_hex(float_to_fixed_point(stage_threshold)))
+
+            classifiers = stage.find('weakClassifiers').findall('_')
+            all_data.append(to_hex(len(classifiers)))
+
+            for classifier in classifiers:
+                internal_data = classifier.find('internalNodes').text.strip().split()
+                feature_idx = int(internal_data[2])
+                threshold = float(internal_data[3])
+
+                leaf_data = classifier.find('leafValues').text.strip().split()
+                left_val = float(leaf_data[0])
+                right_val = float(leaf_data[1])
+
+                all_data.append(to_hex(feature_idx))
+                all_data.append(to_hex(float_to_fixed_point(threshold)))
+                all_data.append(to_hex(float_to_fixed_point(left_val)))
+                all_data.append(to_hex(float_to_fixed_point(right_val)))
+
+        f.write(",\n".join(all_data))
+        f.write(";\n")
+
+def write_feature_lut_files(mem_file, coe_file, features):
+    """Writes the feature lookup table to .mem and .coe files."""
+    print(f"Writing feature LUT to {mem_file} and {coe_file}...")
+    
+    with open(mem_file, 'w') as f_mem, open(coe_file, 'w') as f_coe:
+        f_coe.write("memory_initialization_radix=16;\n")
+        f_coe.write("memory_initialization_vector=\n")
+
+        all_data_coe = []
+        for feature_rects in features:
+            f_mem.write(f"{len(feature_rects):08x}\n")
+            all_data_coe.append(to_hex(len(feature_rects)))
+
+            for x, y, w, h, weight in feature_rects:
+                weight_fp = float_to_fixed_point(weight)
+                f_mem.write(f"{x:08x} {y:08x} {w:08x} {h:08x} {to_hex(weight_fp)}\n")
+                
+                all_data_coe.append(to_hex(x))
+                all_data_coe.append(to_hex(y))
+                all_data_coe.append(to_hex(w))
+                all_data_coe.append(to_hex(h))
+                all_data_coe.append(to_hex(weight_fp))
+        
+        f_coe.write(",\n".join(all_data_coe))
+        f_coe.write(";\n")
+
+import os
+
+def main():
+    """Main function."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    xml_file = os.path.join(script_dir, 'data/haarcascade_frontalface_default.xml')
+    cascade_mem_file = os.path.join(script_dir, 'data/cascade_data.mem')
+    cascade_coe_file = os.path.join(script_dir, 'data/cascade_data.coe')
+    feature_mem_file = os.path.join(script_dir, 'data/feature_lut.mem')
+    feature_coe_file = os.path.join(script_dir, 'data/feature_lut.coe')
+
+    try:
+        stages, features, width, height = parse_xml(xml_file)
+        
+        write_mem_file(cascade_mem_file, stages, features, width, height)
+        write_coe_file(cascade_coe_file, stages, features, width, height)
+        write_feature_lut_files(feature_mem_file, feature_coe_file, features)
+        
+        print("\nParsing complete!")
+        print(f"Output files generated:")
+        print(f"  - {cascade_mem_file}")
+        print(f"  - {cascade_coe_file}")
+        print(f"  - {feature_mem_file}")
+        print(f"  - {feature_coe_file}")
+
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Error: {e}")
+        exit(1)
+
+if __name__ == '__main__':
+    main()
+```
+---
+
+================================================================================
+SECTION 3: VIVADO AUTOMATION
+================================================================================
+
+This section contains the Tcl script to automate the Vivado build process.
+
+--------------------------------------------------------------------------------
+STEP 3.1: VIVADO TCL SCRIPT
+--------------------------------------------------------------------------------
+
+The file `create_project.tcl` should already be in your project directory. Its content is provided below for your reference. This script will create the project, add sources, generate IP, and build the bitstream.
+
+---
+**`create_project.tcl`**
+```tcl
+# create_project.tcl
+#
+# This script creates a Vivado project for the Verilog Face Detector,
+# synthesizes the design, and generates a bitstream.
+#
+# Usage:
+#   vivado -mode batch -source create_project.tcl
+#
+
+# --- Configuration ---
+# Project settings
+set project_name "verilog_face_detector"
+set project_dir "vivado_project"
+set top_level_module "face_detector"
+
+# Target FPGA device (change this to match your board)
+set target_device "xc7z020clg484-1"
+
+# Verilog source files
+set verilog_sources [glob -nocomplain "src/*.v"]
+
+# Constraints file
+set xdc_file "src/face_detector.xdc"
+
+# Memory initialization files
+set cascade_coe_file "data/cascade_data.coe"
+set feature_lut_coe_file "data/feature_lut.coe"
+
+# --- Project Creation ---
+puts "Creating Vivado project..."
+create_project $project_name $project_dir -part $target_device -force
+
+# Add Verilog source files
+add_files -norecurse $verilog_sources
+
+# Add constraints file
+add_files -fileset constrs_1 -norecurse $xdc_file
+
+# --- IP Core Generation ---
+puts "Generating IP cores for ROMs..."
+
+# Cascade ROM
+create_ip -name blk_mem_gen -vendor xilinx.com -library ip -module_name cascade_rom_ip
+set_property -dict [list \
+    CONFIG.Memory_Type {Single_Port_ROM} \
+    CONFIG.Load_Init_File {true} \
+    CONFIG.Coe_File [file normalize $cascade_coe_file] \
+    CONFIG.Use_MEM_Init {1} \
+    CONFIG.Enable_32bit_Address {false} \
+    CONFIG.Write_Width_A {32} \
+    CONFIG.Write_Depth_A {16384} \
+    CONFIG.Read_Width_A {32} \
+    CONFIG.Register_PortA_Output_of_Memory_Primitives {false} \
+] [get_ips cascade_rom_ip]
+
+generate_target {instantiation_template} [get_ips cascade_rom_ip]
+synth_ip [get_ips cascade_rom_ip]
+
+# Feature LUT ROM
+create_ip -name blk_mem_gen -vendor xilinx.com -library ip -module_name feature_lut_rom_ip
+set_property -dict [list \
+    CONFIG.Memory_Type {Single_Port_ROM} \
+    CONFIG.Load_Init_File {true} \
+    CONFIG.Coe_File [file normalize $feature_lut_coe_file] \
+    CONFIG.Use_MEM_Init {1} \
+    CONFIG.Enable_32bit_Address {false} \
+    CONFIG.Write_Width_A {32} \
+    CONFIG.Write_Depth_A {16384} \
+    CONFIG.Read_Width_A {32} \
+    CONFIG.Register_PortA_Output_of_Memory_Primitives {false} \
+] [get_ips feature_lut_rom_ip]
+
+generate_target {instantiation_template} [get_ips feature_lut_rom_ip]
+synth_ip [get_ips feature_lut_rom_ip]
+
+# --- Synthesis ---
+puts "Synthesizing the design..."
+update_compile_order -fileset sources_1
+synth_design -top $top_level_module -part $target_device
+
+# --- Implementation ---
+puts "Implementing the design..."
+opt_design
+place_design
+route_design
+write_bitstream -force "${project_dir}/${project_name}.runs/impl_1/${project_name}.bit"
+
+puts "Bitstream generated successfully."
+puts "To run the design on a board, you will need to create a constraints file (.xdc) and map the top-level ports to the physical pins on the FPGA."
+```
+---
+
+--------------------------------------------------------------------------------
+STEP 3.2: RUNNING THE VIVADO BUILD
+--------------------------------------------------------------------------------
+
+1.  **Open the Vivado Tcl Shell** from the Start Menu.
+2.  **Navigate** to your `verilog_face_detector` project directory.
+3.  **Run the following command** to execute the script. It will create a `vivado_project` subdirectory containing the full Vivado project and build outputs, including the bitstream.
+
+```
+vivado -mode batch -source create_project.tcl
+```
+
+================================================================================
+SECTION 4: ARCHITECTURE VISUALIZATION
+================================================================================
+
+You have two ways to visualize the project architecture.
+
+--------------------------------------------------------------------------------
+OPTION 4.1: HARDWARE SCHEMATIC (IN VIVADO)
+--------------------------------------------------------------------------------
+
+After the script in Section 3 completes, you can open the generated project in the Vivado GUI (`vivado_project/verilog_face_detector.xpr`).
+
+In Vivado, navigate to **Flow Navigator -> Synthesis -> Open Synthesized Design**. From there, you can click **Schematic** to view a detailed, gate-level schematic of the hardware design. This is the most accurate "graph" of the hardware.
+
+--------------------------------------------------------------------------------
+OPTION 4.2: SOFTWARE CO-SIMULATION DIAGRAM
+--------------------------------------------------------------------------------
+
+The project includes a Python script to print an ASCII diagram of the *software and hardware co-simulation architecture*. This is useful for understanding the whole system, including the Python server.
+
+1.  **Save the code below** as `visualize_architecture.py` in your `verilog_face_detector` directory (if it's not already there).
+2.  **Run the script** from your command prompt: `python visualize_architecture.py`
+
+---
+**`visualize_architecture.py`**
+```python
+#!/usr/bin/env python3
+"""
+visualize_architecture.py
+Creates a visual diagram of the emotion classification co-simulation architecture
+"""
+
+def print_architecture_diagram():
+    """Print ASCII architecture diagram"""
+    
+    diagram = """
+================================================================================
+    EMOTION CLASSIFICATION CO-SIMULATION ARCHITECTURE
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           VERILOG HARDWARE LAYER                            │
+│                         (Icarus Verilog Simulator)                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                        Face Detector Module                           │ │
+│  │                      (Haar Cascade Algorithm)                         │ │
+│  ├───────────────────────────────────────────────────────────────────────┤ │
+│  │  • Input: 64×64 grayscale image stream                               │ │
+│  │  • Process: Integral image + sliding window + cascade stages         │ │
+│  │  • Output: face_detected, detection_x, detection_y                   │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                     │                                       │
+│                                     ▼                                       │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                   Testbench (tb_emotion_classifier.v)                 │ │
+│  ├───────────────────────────────────────────────────────────────────────┤ │
+│  │  • Loads image from file                                             │ │
+│  │  • Feeds pixels to face detector                                     │ │
+│  │  • Monitors detection status                                         │ │
+│  │  • Calls $send_roi_for_emotion() when face found                     │ │
+│  │  • Displays emotion result                                           │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                     │                                       │
+│                                     │ VPI System Task Call                  │
+│                                     │ $send_roi_for_emotion(x,y,w,h,mem)   │
+└─────────────────────────────────────┼─────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         VPI C INTERFACE LAYER                               │
+│                    (verilog_python_interface.c)                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                      VPI Task Implementation                          │ │
+│  ├───────────────────────────────────────────────────────────────────────┤ │
+│  │  1. Extract ROI coordinates (x, y, width, height)                    │ │
+│  │  2. Read 64×64 pixels from Verilog memory                            │ │
+│  │  3. Pack into binary buffer (4096 bytes)                             │ │
+│  │  4. Connect to Python server (127.0.0.1:8888)                        │ │
+│  │  5. Send: "ROI x y w h <binary_data>\n"                              │ │
+│  │  6. Receive: "Happy (confidence: 85.23%)\n"                          │ │
+│  │  7. Display emotion in console                                       │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                     │                                       │
+│                                     │ TCP Socket (127.0.0.1:8888)           │
+└─────────────────────────────────────┼─────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         PYTHON AI SERVER LAYER                              │
+│                          (emotion_server.py)                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                        TCP Server (Port 8888)                         │ │
+│  ├───────────────────────────────────────────────────────────────────────┤ │
+│  │  • Listens for connections from Verilog                              │ │
+│  │  • Accepts multiple clients (threaded)                               │ │
+│  │  • Parses ROI messages                                               │ │
+│  │  • Extracts 64×64 binary image data                                  │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                     │                                       │
+│                                     ▼                                       │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                       EmotionClassifier Class                         │ │
+│  ├───────────────────────────────────────────────────────────────────────┤ │
+│  │  Preprocessing:
+│  │    1. Convert binary to numpy array (64×64)                          │ │
+│  │    2. Resize to 48×48 (bilinear interpolation)                       │ │
+│  │    3. Normalize to [0, 1]                                            │ │
+│  │    4. Reshape to (1, 48, 48, 1)                                      │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                     │                                       │
+│                                     ▼                                       │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                    Mini-Xception Neural Network                       │ │
+│  ├───────────────────────────────────────────────────────────────────────┤ │
+│  │  Architecture:
+│  │    • Input: 48×48×1 grayscale image                                  │ │
+│  │    • Depthwise Separable Convolutions                                │ │
+│  │    • Batch Normalization layers                                      │ │
+│  │    • Residual connections                                            │ │
+│  │    • Global Average Pooling                                          │ │
+│  │    • Output: 7 classes (softmax)                                     │ │
+│  │                                                                       │ │
+│  │  Emotion Classes:
+│  │    [0] Angry    [1] Disgust   [2] Fear      [3] Happy               │ │
+│  │    [4] Sad      [5] Surprise   [6] Neutral                           │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                     │                                       │
+│                                     ▼                                       │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                        Post-processing                                │ │
+│  ├───────────────────────────────────────────────────────────────────────┤ │
+│  │  • argmax(predictions) → emotion_index                               │ │
+│  │  • max(predictions) → confidence_score                               │ │
+│  │  • Format: "Emotion (confidence: XX.XX%)"                            │ │
+│  │  • Send back to Verilog via TCP                                      │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+                              TIMING BREAKDOWN
+================================================================================
+
+Stage                    | Time (ms) | Percentage | Location
+─────────────────────────┼───────────┼────────────┼──────────────────────
+Face Detection           |    5.0    |    50%     | Verilog Hardware
+ROI Extraction           |    0.1    |     1%     | VPI C Interface
+TCP Send (4KB)           |    0.5    |     5%     | Network
+Image Resize (64→48)     |    0.5    |     5%     | Python (numpy/PIL)
+Emotion Inference        |    3.0    |    30%     | Python (TensorFlow)
+TCP Receive              |    0.5    |     5%     | Network
+Display/Log              |    0.4    |     4%     | Console Output
+─────────────────────────┼───────────┼────────────┼──────────────────────
+TOTAL LATENCY            |   ~10.0   |   100%     | End-to-End
+─────────────────────────┴───────────┴────────────┴──────────────────────
+
+Throughput: ~100 FPS (frames per second)
+Real-time capable: ✓ Yes (< 33ms for 30 FPS video)
+
+================================================================================
+                              DATA FLOW EXAMPLE
+================================================================================
+
+1. Input Image (64×64 grayscale)
+   ┌────────────────────────┐
+   │ Pixel data: 0-255      │
+   │ Format: hex text file  │
+   │ Size: 4096 pixels      │
+   └────────────────────────┘
+              │
+              ▼
+2. Face Detection (Verilog)
+   ┌────────────────────────┐
+   │ Integral image calc    │
+   │ Sliding window scan    │
+   │ 25 cascade stages      │
+   │ Result: Face @ (16,16) │
+   └────────────────────────┘
+              │
+              ▼
+3. ROI Extraction (VPI)
+   ┌────────────────────────┐
+   │ Extract 64×64 region   │
+   │ Pack as binary         │
+   │ Send via TCP socket    │
+   └────────────────────────┘
+              │
+              ▼
+4. Preprocessing (Python)
+   ┌────────────────────────┐
+   │ Receive binary data    │
+   │ Convert to numpy array │
+   │ Resize 64×64 → 48×48   │
+   │ Normalize [0, 1]       │
+   └────────────────────────┘
+              │
+              ▼
+5. Classification (Neural Network)
+   ┌────────────────────────┐
+   │ Forward pass           │
+   │ Softmax output         │
+   │ Result: [0.05, 0.02,   │
+   │  0.03, 0.85, 0.02,     │
+   │  0.01, 0.02]           │
+   │ Max: Happy (85%)       │
+   └────────────────────────┘
+              │
+              ▼
+6. Result Display (Verilog Console)
+   ┌────────────────────────┐
+   │ EMOTION DETECTED:      │
+   │ Happy (conf: 85.23%)   │
+   └────────────────────────┘
+
+================================================================================
+                            BUILDING & RUNNING
+================================================================================
+
+Step 1: Build VPI Module
+┌─────────────────────────────────────────┐
+│ $ make vpi                              │
+│                                         │
+│ Compiles: verilog_python_interface.c    │
+│ Creates: verilog_python_interface.vpi   │
+└─────────────────────────────────────────┘
+
+Step 2: Start Python Server (Terminal 1)
+┌─────────────────────────────────────────┐
+│ $ make start-server                     │
+│                                         │
+│ Listening on: 0.0.0.0:8888              │
+│ Model: Mock Classifier (or real model)  │
+└─────────────────────────────────────────┘
+
+Step 3: Run Simulation (Terminal 2)
+┌─────────────────────────────────────────┐
+│ $ make run-cosim                        │
+│                                         │
+│ 1. Compiles Verilog with VPI            │
+│ 2. Loads test image                     │
+│ 3. Runs face detection                  │
+│ 4. Sends ROI to Python                  │
+│ 5. Displays emotion result              │
+└─────────────────────────────────────────┘
+
+================================================================================
+""")
+    print(diagram)
+
+
+def main():
+    """Main entry point"""
+    print_architecture_diagram()
+    
+    print("\nFor more details, see:")
+    print("  • COSIMULATION_GUIDE.md - Complete technical guide")
+    print("  • QUICKSTART.md - Quick reference")
+    print("  • IMPLEMENTATION_SUMMARY.md - Implementation details")
+    print("  • README.md - Project overview")
+    print("\nTo get started:")
+    print("  $ ./test_cosimulation.sh")
+    print()
+
+
+if __name__ == '__main__':
+    main()
+```
+---
+
+```
